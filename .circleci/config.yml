@@ -1,0 +1,101 @@
+version: 2.1
+
+executors:
+  temurin:
+    docker:
+      - image: maven:3.9.9-eclipse-temurin-21
+        # auth:
+        #   username: _json_key
+        #   password: ${DEVELOPMENT_TOOL_GSA_KEY}
+  google-cloud-cli:
+    docker:
+      - image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+
+commands:
+
+  unit_test:
+    steps:
+      - run:
+          name: Run tests
+          command: mvn -f ./pom.xml clean verify
+  
+  scan_sbom:
+    steps:
+      - run:
+          name: Install Syft
+          command: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - run:
+          name: Make SBOM
+          command: |
+            syft scan . \
+              --source-name $(basename $(pwd)) \
+              --source-version $(echo $(git rev-parse --abbrev-ref HEAD))
+      - run:
+          name: Install Grype
+          command: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+      - run:
+          name: Analyze SBOM
+          command: grype sbom:./target/syft-sbom.json
+  
+  analyze_dependency:
+    steps:
+      - run:
+          name: Analyze maven dependencies
+          command: |
+            mvn -f ./pom.xml dependency-check:check
+
+  check_coding_bug:
+    steps:
+      - run:
+          name: Check coding bugs
+          command: mvn -f ./pom.xml spotbugs:check
+
+  store_analyzed_reports:
+    steps:
+      - store_artifacts:
+          path: ./target/site/jacoco
+          destination: jacoco
+      - store_artifacts:
+          path: ./target/dependency-check-report.json
+          destination: dependency-check-report.json
+      - store_artifacts:
+          path: ./target/dependency-check-report.html
+          destination: dependency-check-report.html
+      - store_artifacts:
+          path: ./target/spotbugsXml.xml
+          destination: spotbugsXml.xml
+      - store_artifacts:
+          path: ./target/spotbugs.html
+          destination: spotbugs.html
+      - store_artifacts:
+          path: ./target/syft-sbom.json
+          destination: syft-sbom.json
+      - store_artifacts:
+          path: ./grype-scan-report.json
+          destination: grype-scan-report.json
+
+  gcloud_setting:
+    steps:
+      - run:
+          name: Authorize Google Cloud for Image Push and Deploy
+          command: |
+            echo ${SERVICE_GSA_KEY} | gcloud auth activate-service-account --key-file=-
+            gcloud auth list
+            gcloud config list
+
+  deploy:
+    steps:
+      - run:
+          name: Deploy to HTTP Function
+          command: |
+            gcloud functions deploy ${BATCH_NAME} \
+              --gen2 \
+              --region=${BATCH_GCP_REGION} \
+              --runtime=${BATCH_RUNTIME} \
+              --source=. \
+              --entry-point=${BATCH_ENTRY_POINT} \
+              --trigger-http \
+              --allow-unauthenticated
+
+jobs:
+  
