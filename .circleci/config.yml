@@ -96,6 +96,15 @@ commands:
             gcloud auth list
             gcloud config list
 
+  build:
+    steps:
+      - run:
+          name: Build Function
+          command: mvn -f ./pom.xml clean package -DskipTests -s ./settings.xml
+      - run:
+          name: Copy Function
+          command: cp ./target/*.jar ./target/batch.jar
+
   deploy:
     steps:
       - run:
@@ -106,7 +115,7 @@ commands:
               --project=${BATCH_GCP_PROJECT} \
               --region=${BATCH_GCP_REGION} \
               --runtime=${BATCH_RUNTIME} \
-              --source=./ \
+              --source=./target \
               --entry-point=${BATCH_ENTRY_POINT} \
               --trigger-http \
               --allow-unauthenticated
@@ -140,6 +149,18 @@ jobs:
       - unit_test
       - store_unit_test_reports
 
+  batch1-build:
+    executor: temurin
+    working_directory: ~/project/batches/batch1
+    steps:
+      - checkout:
+          path: ~/project
+      - build
+      - persist_to_workspace:
+          root: ~/project/batches/batch1/target
+          paths:
+            - batch.jar
+
   batch1-deploy:
     executor: google-cloud-cli
     working_directory: ~/project/batches/batch1
@@ -147,6 +168,8 @@ jobs:
       - checkout:
           path: ~/project
       - gcloud_setting
+      - attach_workspace:
+          at: ~/project/batches/batch1/target
       - deploy
 
 
@@ -176,8 +199,8 @@ workflows:
           context:
             - DEVELOPMENT_TOOL
             - BATCH1_DEV
-      # デプロイパイプライン
-      - batch1-deploy:
+      # ビルドパイプライン 
+      - batch1-build:
           requires:
             - batch1-static-analysis
             - batch1-unit-test
@@ -185,5 +208,13 @@ workflows:
             branches:
               only: 
                 - main # 一時的にdevelopからmainに変更
+          context:
+            - DEVELOPMENT_TOOL
+            - BATCH1_DEV
+      # デプロイパイプライン
+      - batch1-deploy:
+          requires:
+            - batch1-build
+          filters: *develop_filters
           context:
             - BATCH1_DEV
