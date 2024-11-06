@@ -24,7 +24,6 @@
 
 	<properties>
 		<!-- <java.version>21</java.version> 一時的に17で対応-->
-		<java.version>17</java.version>
 	</properties>
 
 	<dependencies>
@@ -149,12 +148,10 @@
 			<name>central</name>
 			<url>https://repo.maven.apache.org/maven2</url>
 			<releases>
-				<!-- <enabled>false</enabled> 一時的にtrueにしておく-->
-				<enabled>true</enabled>
+				<enabled>false</enabled>
 			</releases>
 			<snapshots>
-				<!-- <enabled>false</enabled> 一時的にtrueにしておく-->
-				<enabled>true</enabled>
+				<enabled>false</enabled>
 			</snapshots>
 		</repository>
 	</repositories>

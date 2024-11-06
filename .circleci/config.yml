@@ -1,12 +1,22 @@
 version: 2.1
 
+parameters:
+  pipeline-batch1:
+    description: "Switch to true to trigger the pipeline for the batch1"
+    type: boolean
+    default: true # パイプラインを実行する場合は、trueを設定
+  # pipeline-batch2:
+  #   description: "Switch to true to trigger the pipeline for the batch2"
+  #   type: boolean
+  #   default: false # パイプラインを実行する場合は、trueを設定
+
 executors:
   temurin:
     docker:
-      - image: maven:3.9.9-eclipse-temurin-21
-        # auth:
-        #   username: _json_key
-        #   password: ${DEVELOPMENT_TOOL_GSA_KEY}
+      - image: ${DEVELOPMENT_TOOL_GCP_REGION}-docker.pkg.dev/${DEVELOPMENT_TOOL_GCP_PROJECT}/${DEVELOPMENT_TOOL_BASE_AR_REPO_NAME}/maven:3.9.9-eclipse-temurin-21
+        auth:
+          username: _json_key
+          password: ${DEVELOPMENT_TOOL_GSA_KEY}
   google-cloud-cli:
     docker:
       - image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
@@ -17,7 +27,7 @@ commands:
     steps:
       - run:
           name: Run tests
-          command: mvn -f ./pom.xml clean verify
+          command: mvn -f ./pom.xml clean verify -s ./settings.xml
   
   scan_sbom:
     steps:
@@ -42,19 +52,16 @@ commands:
       - run:
           name: Analyze maven dependencies
           command: |
-            mvn -f ./pom.xml dependency-check:check
+            mvn -f ./pom.xml dependency-check:check -s ./settings.xml
 
   check_coding_bug:
     steps:
       - run:
           name: Check coding bugs
-          command: mvn -f ./pom.xml spotbugs:check
+          command: mvn -f ./pom.xml spotbugs:check -s ./settings.xml
 
-  store_analyzed_reports:
+  store_static_analyzed_reports:
     steps:
-      - store_artifacts:
-          path: ./target/site/jacoco
-          destination: jacoco
       - store_artifacts:
           path: ./target/dependency-check-report.json
           destination: dependency-check-report.json
@@ -74,12 +81,18 @@ commands:
           path: ./grype-scan-report.json
           destination: grype-scan-report.json
 
+  store_unit_test_reports:
+    steps:
+      - store_artifacts:
+          path: ./target/site/jacoco
+          destination: jacoco
+
   gcloud_setting:
     steps:
       - run:
           name: Authorize Google Cloud for Image Push and Deploy
           command: |
-            echo ${SERVICE_GSA_KEY} | gcloud auth activate-service-account --key-file=-
+            echo ${BATCH_GSA_KEY} | gcloud auth activate-service-account --key-file=-
             gcloud auth list
             gcloud config list
 
@@ -90,12 +103,87 @@ commands:
           command: |
             gcloud functions deploy ${BATCH_NAME} \
               --gen2 \
+              --project=${BATCH_GCP_PROJECT} \
               --region=${BATCH_GCP_REGION} \
               --runtime=${BATCH_RUNTIME} \
-              --source=. \
+              --source=./ \
               --entry-point=${BATCH_ENTRY_POINT} \
               --trigger-http \
               --allow-unauthenticated
 
 jobs:
+  batch1-static-analysis:
+    executor: temurin
+    working_directory: ~/project/batches/batch1
+    steps:
+      - checkout:
+          path: ~/project
+      # - restore_cache:
+      #     keys:
+      #       - dependency-check-db-{{ .Branch }}-{{ .Revision }}
+      #       - dependency-check-db-
+      - scan_sbom
+      # - analyze_dependency
+      - check_coding_bug
+      # - save_cache:
+      #     paths:
+      #       - .m2/repository/org/owasp/dependency-check-data
+      #     key: dependency-check-db-{{ .Branch }}-{{ .Revision }}
+      - store_static_analyzed_reports
   
+  batch1-unit-test:
+    executor: temurin
+    working_directory: ~/project/batches/batch1
+    steps:
+      - checkout:
+          path: ~/project
+      - unit_test
+      - store_unit_test_reports
+
+  batch1-deploy:
+    executor: google-cloud-cli
+    working_directory: ~/project/batches/batch1
+    steps:
+      - checkout:
+          path: ~/project
+      - gcloud_setting
+      - deploy
+
+
+workflows:
+
+  batch1-develop:
+    when: 
+      and: 
+        - equal: [ true, << pipeline.parameters.pipeline-batch1 >> ]
+        - or: 
+          - equal: [ "main", << pipeline.git.branch >> ] # 一時的にdevelopからmainに変更
+          - matches: { pattern: "^feature/.*", value: << pipeline.git.branch >> }
+          - matches: { pattern: "^bugfix/.*", value: << pipeline.git.branch >> }
+    jobs:
+      # プレビルドパイプライン
+      - batch1-static-analysis:
+          filters: &prebuild_filters
+            branches:
+              only: 
+                - /^feature\/.*|^bugfix\/.*/
+                - main # 一時的にdevelopからmainに変更
+          context:
+            - DEVELOPMENT_TOOL
+            - BATCH1_DEV
+      - batch1-unit-test:
+          filters: *prebuild_filters
+          context:
+            - DEVELOPMENT_TOOL
+            - BATCH1_DEV
+      # デプロイパイプライン
+      - batch1-deploy:
+          requires:
+            - batch1-static-analysis
+            - batch1-unit-test
+          filters: &develop_filters
+            branches:
+              only: 
+                - main # 一時的にdevelopからmainに変更
+          context:
+            - BATCH1_DEV
