@@ -1,0 +1,36 @@
+# enable/disable checking for application updates on startup
+check-for-app-update: true
+
+# set the name of the target being analyzed
+name: "syft-sbom.json"
+
+# upon scanning, if a severity is found at or above the given severity then the return code will be 1
+# default is unset which will skip this validation (options: negligible, low, medium, high, critical)
+fail-on-severity: "high"
+
+# the output format of the vulnerability report (options: table, template, json, cyclonedx)
+output: "json"
+
+# write output report to a file (default is to write to stdout)
+file: "./target/grype-scan-report.json"
+
+# a list of globs to exclude from scanning
+exclude: []
+
+# grype db config
+db:
+  # check for database updates on execution
+  auto-update: true
+
+  # it ensures db build is no older than the max-allowed-built-age
+  validate-age: true
+
+  # Max allowed age for vulnerability database
+  max-allowed-built-age: "120h"
+
+  # Timeout for downloading GRYPE_DB_UPDATE_URL to see if the database needs to be downloaded
+  update-available-timeout: "30s"
+
+  # Timeout for downloading actual vulnerability DB
+  # The DB is ~156MB as of 2024-04-17 so slower connections may exceed the default timeout; adjust as needed
+  update-download-timeout: "120s"

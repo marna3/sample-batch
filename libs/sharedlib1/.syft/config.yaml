@@ -1,0 +1,29 @@
+# the output format(s) of the SBOM report
+output:
+  - "syft-json=./target/syft-sbom.json"
+
+# enable/disable checking for application updates on startup
+check-for-app-update: true
+
+# the search space to look for file and package data (options: all-layers, squashed)
+scope: "all-layers"
+
+# a list of globs to exclude from scanning
+exclude: ["./test/**"]
+
+# set the base set of catalogers to use (defaults to 'image' or 'directory' depending on the scan source)
+default-catalogers: ["directory"]
+
+# configuration for the source that the SBOM is generated from
+source:
+  base-path: "./"
+
+# java config
+java:
+  # enables Syft to use the network to fill in more detailed information about artifacts
+  # currently this enables searching maven-url for license data
+  # when running across pom.xml files that could have more information, syft will
+  # explicitly search maven for license information by querying the online pom when this is true
+  # this option is helpful for when the parent pom has more data,
+  # that is not accessible from within the final built artifact
+  use-network: true
