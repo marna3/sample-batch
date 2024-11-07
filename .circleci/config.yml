@@ -1,6 +1,10 @@
 version: 2.1
 
 parameters:
+  pipeline-sharedlib1:
+    description: "Switch to true to trigger the pipeline for the sharedlib1"
+    type: boolean
+    default: true # パイプラインを実行する場合は、trueを設定
   pipeline-batch1:
     description: "Switch to true to trigger the pipeline for the batch1"
     type: boolean
@@ -96,11 +100,17 @@ commands:
             gcloud auth list
             gcloud config list
 
-  build:
+  shared_library_build:
     steps:
       - run:
           name: Build Function
-          command: mvn -f ./pom.xml clean package -DskipTests -s ./settings.xml
+          command: mvn -f ./pom.xml clean install -DskipTests -s ./settings.xml # ローカルリポジトリにインストール
+  
+  batch_build:
+    steps:
+      - run:
+          name: Build Function
+          command: mvn -f ./pom.xml clean package -DskipTests -s ./settings.xml -P when-build
 
   deploy:
     steps:
@@ -118,6 +128,34 @@ commands:
               --allow-unauthenticated
 
 jobs:
+  sharedlib1-static-analysis:
+    executor: temurin
+    working_directory: ~/project/libs/sharedlib1
+    steps:
+      - checkout:
+          path: ~/project
+      # - restore_cache:
+      #     keys:
+      #       - dependency-check-db-{{ .Branch }}-{{ .Revision }}
+      #       - dependency-check-db-
+      - scan_sbom
+      # - analyze_dependency
+      - check_coding_bug
+      # - save_cache:
+      #     paths:
+      #       - .m2/repository/org/owasp/dependency-check-data
+      #     key: dependency-check-db-{{ .Branch }}-{{ .Revision }}
+      - store_static_analyzed_reports
+  
+  sharedlib1-unit-test:
+    executor: temurin
+    working_directory: ~/project/libs/sharedlib1
+    steps:
+      - checkout:
+          path: ~/project
+      - unit_test
+      - store_unit_test_reports
+
   batch1-static-analysis:
     executor: temurin
     working_directory: ~/project/batches/batch1
@@ -146,13 +184,27 @@ jobs:
       - unit_test
       - store_unit_test_reports
 
+  sharedlib1-build:
+    executor: temurin
+    working_directory: ~/project/libs/sharedlib1
+    steps:
+      - checkout:
+          path: ~/project
+      - shared_library_build
+      - persist_to_workspace:
+          root: ~/.m2/repository/sample # pom.xmlのgroupIdに合わせてリポジトリを指定
+          paths:
+            - ./**/*
+
   batch1-build:
     executor: temurin
     working_directory: ~/project/batches/batch1
     steps:
       - checkout:
           path: ~/project
-      - build
+      - attach_workspace:
+          at: ~/.m2/repository/sample
+      - batch_build
       - persist_to_workspace:
           root: target
           paths:
@@ -171,6 +223,29 @@ jobs:
 
 
 workflows:
+
+  sharedlib1-prebuild:
+    when: 
+      and: 
+        - equal: [ true, << pipeline.parameters.pipeline-sharedlib1 >> ]
+        - or: 
+          - matches: { pattern: "^feature/.*", value: << pipeline.git.branch >> }
+          - matches: { pattern: "^bugfix/.*", value: << pipeline.git.branch >> }
+    jobs:
+      # プレビルドパイプライン
+      - sharedlib1-static-analysis:
+          filters: &prebuild_filters
+            branches:
+              only: 
+                - /^feature\/.*|^bugfix\/.*/
+          context:
+            - DEVELOPMENT_TOOL
+            - SHAREDLIB1_DEV
+      - sharedlib1-unit-test:
+          filters: *prebuild_filters
+          context:
+            - DEVELOPMENT_TOOL
+            - SHAREDLIB1_DEV
 
   batch1-develop:
     when: 
@@ -196,15 +271,35 @@ workflows:
           context:
             - DEVELOPMENT_TOOL
             - BATCH1_DEV
-      # ビルドパイプライン 
-      - batch1-build:
-          requires:
-            - batch1-static-analysis
-            - batch1-unit-test
+      # プレビルドパイプライン
+      - sharedlib1-static-analysis:
           filters: &develop_filters
             branches:
               only: 
                 - main # 一時的にdevelopからmainに変更
+          context:
+            - DEVELOPMENT_TOOL
+            - SHAREDLIB1_DEV
+      - sharedlib1-unit-test:
+          filters: *develop_filters
+          context:
+            - DEVELOPMENT_TOOL
+            - SHAREDLIB1_DEV
+      # ビルドパイプライン 
+      - sharedlib1-build:
+          requires:
+            - sharedlib1-static-analysis
+            - sharedlib1-unit-test
+          filters: *develop_filters
+          context:
+            - DEVELOPMENT_TOOL
+            - SHAREDLIB1_DEV
+      - batch1-build:
+          requires:
+            - batch1-static-analysis
+            - batch1-unit-test
+            - sharedlib1-build
+          filters: *develop_filters
           context:
             - DEVELOPMENT_TOOL
             - BATCH1_DEV
