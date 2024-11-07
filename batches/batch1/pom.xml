@@ -5,7 +5,7 @@
 
 	<groupId>com.example</groupId>
 	<artifactId>batch1</artifactId>
-	<version>0.0.1</version>
+	<version>0.0.2</version>
 	<name>batch1</name>
 	<description>Demo project for Spring Boot</description>
 	<url/>

@@ -101,9 +101,6 @@ commands:
       - run:
           name: Build Function
           command: mvn -f ./pom.xml clean package -DskipTests -s ./settings.xml
-      - run:
-          name: Copy Function
-          command: cp ./target/*.jar ./target/batch.jar
 
   deploy:
     steps:
@@ -157,9 +154,9 @@ jobs:
           path: ~/project
       - build
       - persist_to_workspace:
-          root: ~/project/batches/batch1/target
+          root: target
           paths:
-            - batch.jar
+            - ./*.jar
 
   batch1-deploy:
     executor: google-cloud-cli
