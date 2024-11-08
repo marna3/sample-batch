@@ -27,12 +27,14 @@ executors:
 
 commands:
 
+  # 単体テスト実行用コマンド
   unit_test:
     steps:
       - run:
           name: Run tests
           command: mvn -f ./pom.xml clean verify -s ./settings.xml
   
+  # SBOM解析実行用コマンド
   scan_sbom:
     steps:
       - run:
@@ -51,6 +53,7 @@ commands:
           name: Analyze SBOM
           command: grype sbom:./target/syft-sbom.json
   
+  # 依存関係ライブラリ脆弱性☑用コマンド
   analyze_dependency:
     steps:
       - run:
@@ -58,12 +61,14 @@ commands:
           command: |
             mvn -f ./pom.xml dependency-check:check -s ./settings.xml
 
+  # コーディングバグチェック用コマンド
   check_coding_bug:
     steps:
       - run:
           name: Check coding bugs
           command: mvn -f ./pom.xml spotbugs:check -s ./settings.xml
 
+  # 静的解析結果保存用コマンド
   store_static_analyzed_reports:
     steps:
       - store_artifacts:
@@ -85,33 +90,38 @@ commands:
           path: ./grype-scan-report.json
           destination: grype-scan-report.json
 
+  # 単体テスト結果保存用コマンド
   store_unit_test_reports:
     steps:
       - store_artifacts:
           path: ./target/site/jacoco
           destination: jacoco
 
+  # Google Cloudサービスアカウントアクティベート用コマンド
   gcloud_setting:
     steps:
       - run:
-          name: Authorize Google Cloud for Image Push and Deploy
+          name: Authorize Google Cloud for Function Deploy
           command: |
             echo ${BATCH_GSA_KEY} | gcloud auth activate-service-account --key-file=-
             gcloud auth list
             gcloud config list
 
+  # 共有ライブラリビルド用コマンド
   shared_library_build:
     steps:
       - run:
-          name: Build Function
-          command: mvn -f ./pom.xml clean install -DskipTests -s ./settings.xml # ローカルリポジトリにインストール
+          name: Build Shared Library and Install to Maven Local Repository
+          command: mvn -f ./pom.xml clean install -DskipTests -s ./settings.xml
   
+  # バッチビルド用コマンド
   batch_build:
     steps:
       - run:
           name: Build Function
           command: mvn -f ./pom.xml clean package -DskipTests -s ./settings.xml -P when-build
 
+  # バッチデプロイ用コマンド
   deploy:
     steps:
       - run:
@@ -128,6 +138,7 @@ commands:
               --allow-unauthenticated
 
 jobs:
+  # 共有ライブラリ (sharedlib1) の静的解析用ジョブ
   sharedlib1-static-analysis:
     executor: temurin
     working_directory: ~/project/libs/sharedlib1
@@ -147,6 +158,7 @@ jobs:
       #     key: dependency-check-db-{{ .Branch }}-{{ .Revision }}
       - store_static_analyzed_reports
   
+  # 共有ライブラリ (sharedlib1) の単体テスト用ジョブ
   sharedlib1-unit-test:
     executor: temurin
     working_directory: ~/project/libs/sharedlib1
@@ -156,6 +168,7 @@ jobs:
       - unit_test
       - store_unit_test_reports
 
+  # バッチ (batch1) の静的解析用ジョブ
   batch1-static-analysis:
     executor: temurin
     working_directory: ~/project/batches/batch1
@@ -175,6 +188,7 @@ jobs:
       #     key: dependency-check-db-{{ .Branch }}-{{ .Revision }}
       - store_static_analyzed_reports
   
+  # バッチ (batch1) の単体テスト用ジョブ
   batch1-unit-test:
     executor: temurin
     working_directory: ~/project/batches/batch1
@@ -184,6 +198,7 @@ jobs:
       - unit_test
       - store_unit_test_reports
 
+  # 共有ライブラリ (sharedlib1) のビルド用ジョブ
   sharedlib1-build:
     executor: temurin
     working_directory: ~/project/libs/sharedlib1
@@ -192,10 +207,11 @@ jobs:
           path: ~/project
       - shared_library_build
       - persist_to_workspace:
-          root: ~/.m2/repository/sample # pom.xmlのgroupIdに合わせてリポジトリを指定
+          root: ~/.m2/repository/sample # "sample"部分は共有ライブラリのpom.xmlのgroupIdに合わせてリポジトリを指定
           paths:
-            - ./**/*
+            - ./**/* # Mavenローカルリポジトリにインストールされた共有ライブラリを指定
 
+  # バッチ (batch1) のビルド用ジョブ
   batch1-build:
     executor: temurin
     working_directory: ~/project/batches/batch1
@@ -203,13 +219,14 @@ jobs:
       - checkout:
           path: ~/project
       - attach_workspace:
-          at: ~/.m2/repository/sample
+          at: ~/.m2/repository/sample # "sample"部分は共有ライブラリのpom.xmlのgroupIdに合わせてリポジトリを指定
       - batch_build
       - persist_to_workspace:
           root: target
           paths:
-            - ./*.jar
+            - ./*.jar # ビルド済みのバッチのjarファイルを指定
 
+  # バッチ (batch1) のデプロイ用ジョブ
   batch1-deploy:
     executor: google-cloud-cli
     working_directory: ~/project/batches/batch1
@@ -218,12 +235,13 @@ jobs:
           path: ~/project
       - gcloud_setting
       - attach_workspace:
-          at: ~/project/batches/batch1/target
+          at: ~/project/batches/batch1/target # gcloud functions deployのソースディレクトリの指定に合わせて設定
       - deploy
 
 
 workflows:
 
+  # 共有ライブラリの静的解析と単体テスト用ワークフローを定義
   sharedlib1-prebuild:
     when: 
       and: 
@@ -247,6 +265,7 @@ workflows:
             - DEVELOPMENT_TOOL
             - SHAREDLIB1_DEV
 
+  # バッチのITa環境デプロイ用のワークフローを定義
   batch1-develop:
     when: 
       and: 
@@ -256,7 +275,7 @@ workflows:
           - matches: { pattern: "^feature/.*", value: << pipeline.git.branch >> }
           - matches: { pattern: "^bugfix/.*", value: << pipeline.git.branch >> }
     jobs:
-      # プレビルドパイプライン
+      # バッチの静的解析用ジョブ
       - batch1-static-analysis:
           filters: &prebuild_filters
             branches:
@@ -266,12 +285,13 @@ workflows:
           context:
             - DEVELOPMENT_TOOL
             - BATCH1_DEV
+      # バッチの単体テスト用ジョブ
       - batch1-unit-test:
           filters: *prebuild_filters
           context:
             - DEVELOPMENT_TOOL
             - BATCH1_DEV
-      # プレビルドパイプライン
+      # バッチで使用する共有ライブラリの静的解析用ジョブ (developブランチマージ時に実行)
       - sharedlib1-static-analysis:
           filters: &develop_filters
             branches:
@@ -280,12 +300,13 @@ workflows:
           context:
             - DEVELOPMENT_TOOL
             - SHAREDLIB1_DEV
+      # バッチで使用する共有ライブラリの単体テスト用ジョブ (developブランチマージ時に実行)
       - sharedlib1-unit-test:
           filters: *develop_filters
           context:
             - DEVELOPMENT_TOOL
             - SHAREDLIB1_DEV
-      # ビルドパイプライン 
+      # バッチで使用する共有ライブラリのビルド用ジョブ (共有ライブラリをローカルリポジトリにインストール)
       - sharedlib1-build:
           requires:
             - sharedlib1-static-analysis
@@ -294,6 +315,7 @@ workflows:
           context:
             - DEVELOPMENT_TOOL
             - SHAREDLIB1_DEV
+      # バッチのビルド用ジョブ (共有ライブラリのローカルリポジトリを参照し、バッチをビルド)
       - batch1-build:
           requires:
             - batch1-static-analysis
@@ -303,7 +325,7 @@ workflows:
           context:
             - DEVELOPMENT_TOOL
             - BATCH1_DEV
-      # デプロイパイプライン
+      # デプロイ用ジョブ (ビルド済みのバッチをデプロイ)
       - batch1-deploy:
           requires:
             - batch1-build
